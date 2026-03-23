@@ -1,0 +1,65 @@
+Value Set Format:
+Value Set Code		: ORA_BEN_ENROLLED_DPNT_PERSON_ID_VS
+Description				: 
+Module 						: Benefits
+Validation Type 	: Table
+Value Data Type		: Character
+FROM Clause				: ben_prtt_enrt_rslt bper, ben_pl_f bpf, ben_opt_f bof, ben_ler_f blf, ben_per_in_ler bpil, ben_pl_typ_f bptf, ben_elig_cvrd_dpnt becp
+Value Column Name : to_char(becp.dpnt_person_id)
+ID Column Name 		: to_char(becp.dpnt_person_id)
+WHERE Clause 			: 1=1
+										and bper.pl_id =	bpf.pl_id(+)
+										and bper.opt_id = bof.opt_id(+)
+										and bper.pl_typ_id =	bptf.pl_typ_id
+										and bper.ler_id =	blf.ler_id
+										and bper.ler_id =	blf.ler_id
+										and bper.ler_id =	blf.ler_id
+										and blf.ler_id = bpil.ler_id
+										and bper.per_in_ler_id =	bpil.per_in_ler_id
+										and bper.prtt_enrt_rslt_id = becp.prtt_enrt_rslt_id
+										and :{PARAMETER.P_EFFECTIVE_DATE} between bpf.effective_start_date(+) and bpf.effective_end_date(+)
+										and :{PARAMETER.P_EFFECTIVE_DATE} between bof.effective_start_date(+) and bof.effective_end_date(+)
+										and :{PARAMETER.P_EFFECTIVE_DATE} between bptf.effective_start_date and bptf.effective_end_date
+										and :{PARAMETER.P_EFFECTIVE_DATE} between blf.effective_start_date and blf.effective_end_date	
+										and :{PARAMETER.P_EFFECTIVE_DATE} between becp.cvg_strt_dt and becp.cvg_thru_dt
+										and bpil.per_in_ler_stat_cd	 in ('STRTD','PROCD')
+										and bper.person_id = :{PARAMETER.P_PERSON_ID}
+										and bper.pl_typ_id = :{PARAMETER.P_PLAN_TYPE_ID}
+										and bper.pl_id = :{PARAMETER.P_PLAN_ID}
+										and becp.dpnt_person_id > :{PARAMETER.P_LIMITER}
+ORDER BY Clause		: becp.dpnt_person_id
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SQL Query:
+select
+	to_char(becp.dpnt_person_id)
+from
+	ben_prtt_enrt_rslt bper,
+	ben_pl_f bpf,
+	ben_opt_f bof,
+	ben_ler_f blf,
+	ben_per_in_ler bpil,
+	ben_pl_typ_f bptf,
+	ben_elig_cvrd_dpnt becp
+where
+	1=1
+	and bper.pl_id =	bpf.pl_id(+)
+	and bper.opt_id = bof.opt_id(+)
+	and bper.pl_typ_id =	bptf.pl_typ_id
+	and bper.ler_id =	blf.ler_id
+	and bper.ler_id =	blf.ler_id
+	and bper.ler_id =	blf.ler_id
+	and blf.ler_id = bpil.ler_id
+	and bper.per_in_ler_id =	bpil.per_in_ler_id
+	and bper.prtt_enrt_rslt_id = becp.prtt_enrt_rslt_id
+	and :{PARAMETER.P_EFFECTIVE_DATE} between bpf.effective_start_date(+) and bpf.effective_end_date(+)
+	and :{PARAMETER.P_EFFECTIVE_DATE} between bof.effective_start_date(+) and bof.effective_end_date(+)
+	and :{PARAMETER.P_EFFECTIVE_DATE} between bptf.effective_start_date and bptf.effective_end_date
+	and :{PARAMETER.P_EFFECTIVE_DATE} between blf.effective_start_date and blf.effective_end_date	
+	and :{PARAMETER.P_EFFECTIVE_DATE} between becp.cvg_strt_dt and becp.cvg_thru_dt
+	and bpil.per_in_ler_stat_cd	 in ('STRTD','PROCD')
+	and bper.person_id = :{PARAMETER.P_PERSON_ID}
+	and bper.pl_typ_id = :{PARAMETER.P_PLAN_TYPE_ID}
+	and bper.pl_id = :{PARAMETER.P_PLAN_ID}
+	and becp.dpnt_person_id > :{PARAMETER.P_LIMITER}	
+order by 
+	becp.dpnt_person_id
