@@ -1,0 +1,44 @@
+Value Set Format:
+Value Set Code		: ORA_BEN_ELIGIBLE_DPNT_PERSON_ID_VS
+Description				: 
+Module 						: Benefits
+Validation Type 	: Table
+Value Data Type		: Character
+FROM Clause				: per_contact_relships_f pcrf, ben_elig_dpnt bed, per_all_people_f papf, ben_per_le_habits_cov_f bplhcf
+Value Column Name : to_char(bed.dpnt_person_id)||'|'||pcrf.contact_type||'|'||bplhcf.registered_disabled_flag
+ID Column Name 		: to_char(bed.dpnt_person_id)||'|'||pcrf.contact_type||'|'||bplhcf.registered_disabled_flag
+WHERE Clause 			: 1=1
+										and pcrf.contact_person_id = bed.dpnt_person_id
+										and papf.person_id = pcrf.person_id
+										and pcrf.contact_type in ('S','C','A','O','T','R')
+										and pcrf.person_id = :{PARAMETER.P_PERSON_ID}
+										and pcrf.contact_person_id = bplhcf.person_id(+)
+										and :{PARAMETER.P_EFFECTIVE_DATE} between bed.elig_strt_dt and bed.elig_thru_dt
+										and :{PARAMETER.P_EFFECTIVE_DATE} between pcrf.effective_start_date and pcrf.effective_end_date
+										and :{PARAMETER.P_EFFECTIVE_DATE} between papf.effective_start_date and papf.effective_end_date
+										and :{PARAMETER.P_EFFECTIVE_DATE} between bplhcf.effective_start_date(+) and bplhcf.effective_end_date(+)
+										and bed.dpnt_person_id > :{PARAMETER.P_LIMITER}
+ORDER BY Clause		: bed.dpnt_person_id
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SQL Query:
+select
+	to_char(bed.dpnt_person_id)||'|'||pcrf.contact_type||'|'||bplhcf.registered_disabled_flag
+from
+	per_contact_relships_f pcrf,
+  ben_elig_dpnt bed,
+  per_all_people_f papf,
+  ben_per_le_habits_cov_f bplhcf
+where
+	1=1
+	and pcrf.contact_person_id = bed.dpnt_person_id
+  and papf.person_id = pcrf.person_id
+  and pcrf.contact_type in ('S','C','A','O','T','R')
+  and pcrf.person_id = :{PARAMETER.P_PERSON_ID}
+  and pcrf.contact_person_id = bplhcf.person_id(+)
+  and :{PARAMETER.P_EFFECTIVE_DATE} between bed.elig_strt_dt and bed.elig_thru_dt
+  and :{PARAMETER.P_EFFECTIVE_DATE} between pcrf.effective_start_date and pcrf.effective_end_date
+  and :{PARAMETER.P_EFFECTIVE_DATE} between papf.effective_start_date and papf.effective_end_date
+  and :{PARAMETER.P_EFFECTIVE_DATE} between bplhcf.effective_start_date(+) and bplhcf.effective_end_date(+)
+  and bed.dpnt_person_id > :{PARAMETER.P_LIMITER}
+order by 
+  bed.dpnt_person_id
