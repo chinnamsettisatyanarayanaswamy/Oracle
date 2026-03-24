@@ -1,0 +1,1244 @@
+/*
+---------------------------------------------------------------------------------------------------------
+--  Application     : ORACLE ERP CLOUD
+--  Report Name	    : ORA HR EIB API Employee Demographics Data Model 
+--  Purpose         : Data model to fetch the Employee Demographics Data
+
+--  CHANGE LOG
+--  Date           Author                             Version      Description
+---------------------------------------------------------------------------------------------------------
+    24-03-2026    Satyanarayana Swamy Chinnamsetti   1.0          Initial Version
+---------------------------------------------------------------------------------------------------------
+*/
+WITH active_assignments AS (
+  SELECT paam.person_id,
+    paam.ass_attribute1,
+    TO_CHAR(paam.effective_start_date, 'MMDDYYYY') AS effective_start_date,
+    paam.effective_end_date,
+    paam.assignment_id,
+    paam.organization_id,
+    paam.business_unit_id,
+    -- hroie.org_information3,
+		-- hroie.org_information1,
+		pcaa.segment1,
+		pcaa.segment2,
+    pjf.job_code,
+    pjlf.information1,
+    pjfft.job_family_name,
+    hlm.meaning AS job_management_level,
+    pptl.user_person_type,
+    paam.employment_category,
+    paam.ass_attribute3,
+    paam.system_person_type,
+    paam.work_at_home,
+    paam.normal_hours,
+    paam.bargaining_unit_code,
+    hapf.position_code,
+		peai.ext_identifier_number,
+    TO_CHAR(psdf.seniority_date, 'MMDDYYYY') AS seniority_date,
+    ROW_NUMBER() OVER (
+      PARTITION BY paam.person_id
+      ORDER BY paam.effective_start_date DESC, paam.effective_sequence DESC
+    ) AS rn
+  FROM per_all_assignments_m paam
+  INNER JOIN hr_organization_units_f_tl houft
+    ON houft.organization_id = paam.business_unit_id
+  -- INNER JOIN hr_organization_info_eff_v hroie
+    -- ON hroie.organization_id = paam.organization_id
+  INNER JOIN per_jobs_f pjf
+    ON pjf.job_id = paam.job_id
+  INNER JOIN per_job_family_f_tl pjfft
+    ON pjfft.job_family_id = pjf.job_family_id
+  INNER JOIN hr_all_positions_f hapf
+    ON hapf.position_id = paam.position_id
+  INNER JOIN per_person_types_tl pptl
+    ON pptl.person_type_id = paam.person_type_id
+	LEFT OUTER JOIN pay_cost_allocations_f pcaf
+  ON (
+    pcaf.source_id = paam.organization_id
+    AND TRUNC(SYSDATE) BETWEEN pcaf.effective_start_date AND pcaf.effective_end_date
+    AND pcaf.source_type = 'ORG'
+  )
+	LEFT OUTER JOIN pay_cost_alloc_accounts pcaa
+  ON pcaa.cost_allocation_record_id = pcaf.cost_allocation_record_id
+  LEFT OUTER JOIN per_job_leg_f pjlf
+    ON (
+      pjlf.job_id = pjf.job_id
+      AND TRUNC(SYSDATE) BETWEEN pjlf.effective_start_date AND pjlf.effective_end_date
+      AND pjlf.legislation_code = 'US'
+      AND pjlf.information_category = 'HRX_US_JOBS'
+    )
+	LEFT OUTER JOIN per_ext_app_identifiers peai
+		ON (
+			peai.person_id = paam.person_id 
+			AND peai.ext_identifier_type  = 'ORA_TCLOCK_BADGE_ID' 
+			AND TO_DATE(:p_effective_date, 'YYYY-MM-DD') BETWEEN peai.date_from AND peai.date_to
+		)
+  LEFT OUTER JOIN per_seniority_dates_f psdf
+    ON paam.person_id = psdf.person_id AND psdf.seniority_date_code = 'LC_PER_LEUSD'
+  LEFT OUTER JOIN hr_lookups hlm
+    ON (
+      pjf.manager_level = hlm.lookup_code AND hlm.lookup_type = 'MANAGER_LEVEL'
+    )
+  WHERE TRUNC(SYSDATE) BETWEEN paam.effective_start_date AND paam.effective_end_date
+    AND TRUNC(SYSDATE) BETWEEN houft.effective_start_date AND houft.effective_end_date
+    AND TRUNC(SYSDATE) BETWEEN pjf.effective_start_date AND pjf.effective_end_date
+    AND TRUNC(SYSDATE) BETWEEN hapf.effective_start_date AND hapf.effective_end_date
+    AND paam.assignment_type IN ('E', 'C')
+    AND paam.assignment_status_type = 'ACTIVE'
+    AND houft.language = USERENV('LANG')
+    AND UPPER(houft.name) = UPPER(:p_business_unit)
+), acitve_assignments_pivot AS (
+  SELECT person_id,
+    MAX(CASE WHEN rn = 1 THEN ext_identifier_number END) AS proximity_badge_number_1,
+    MAX(CASE WHEN rn = 1 THEN effective_start_date END) AS home_wheneffective_1,
+    MAX(CASE WHEN rn = 1 THEN segment1 END) AS home_organizationunit_4_trunk_1,
+    MAX(CASE WHEN rn = 1 THEN segment2 END) AS home_organizationunit_6_branch_1,
+    MAX(CASE WHEN rn = 1 THEN job_code END) AS home_jobclass_1,
+    MAX(CASE WHEN rn = 1 THEN segment1 END) AS home_paygroup_1,
+    MAX(
+      CASE
+        WHEN rn = 1
+        THEN (
+          CASE
+            WHEN (
+              (information1 = 'NONEXEMPT' AND work_at_home != 'Y' AND ass_attribute1 is null) OR system_person_type = 'CWK'
+            )
+            THEN '40H'
+            WHEN (
+							information1 = 'EXEMPT' AND ass_attribute1 IS NULL
+						)
+            THEN 'SAL'
+						WHEN (
+              ass_attribute1 IS NULL OR (work_at_home = 'Y' AND information1 = 'NONEXEMPT')
+            )
+            THEN '40HND'
+          END
+        )
+        ELSE ''
+      END
+    ) AS home_employee_category_1,
+    MAX(
+      CASE
+        WHEN rn = 1
+        THEN (
+          CASE
+            WHEN system_person_type = 'CWK'
+            THEN 'IS-B'
+            WHEN job_family_name IN ('Physicians', 'Advanced Practice Providers')
+            THEN 'MD'
+            WHEN job_management_level = 'Manager'
+            THEN 'MGR'
+            WHEN job_management_level IN ('Director', 'Executive Director')
+            THEN 'DIR'
+            WHEN job_management_level IN ('Vice President', 'Chief Executive Officer', 'C-Suite')
+            THEN 'EX'
+            WHEN employment_category = 'PRN'
+            THEN (
+              CASE WHEN user_person_type NOT LIKE '%Seasonal%' THEN 'PD' ELSE '60-71' END
+            )
+            ELSE (
+              CASE
+								WHEN (
+									2 * normal_hours
+								) <= 47
+								THEN '40-47'
+								WHEN (
+									2 * normal_hours
+								) <= 59
+								THEN '48-59'
+								WHEN (
+									2 * normal_hours
+								) <= 71
+								THEN '60-71'
+								ELSE '72-80'
+							END
+            )
+          END
+        )
+      END
+    ) AS home_employee_class_1,
+    MAX(CASE WHEN rn = 1 THEN ass_attribute3 END) AS home_shift_1,
+    MAX(
+      CASE
+        WHEN rn = 1
+        THEN (
+          CASE
+            WHEN normal_hours IS NOT NULL
+            THEN TO_CHAR(2 * normal_hours) || '00'
+            ELSE ''
+          END
+        )
+      END
+    ) AS home_approved_hours_1,
+    MAX(CASE WHEN rn = 1 THEN bargaining_unit_code END) AS home_union_code_1,
+    MAX(CASE WHEN rn = 1 THEN position_code END) AS home_workday_positionid_1,
+    MAX(CASE WHEN rn = 1 THEN work_at_home END) AS remote_worker,
+    MAX(CASE WHEN rn = 1 THEN seniority_date END) AS home_seniority_date_1,
+    MAX(CASE WHEN rn = 2 THEN effective_start_date END) AS alt_wheneffective_1,
+    MAX(CASE WHEN rn = 2 THEN segment1 END) AS alt_organizationunit_4_trunk_1,
+    MAX(CASE WHEN rn = 2 THEN segment2 END) AS alt_organizationunit_6_branch_1,
+    MAX(CASE WHEN rn = 2 THEN job_code END) AS alt_jobclass_1,
+    MAX(
+      CASE
+        WHEN rn = 2
+        THEN (
+          CASE
+            WHEN (
+              (information1 = 'NONEXEMPT' AND work_at_home != 'Y' AND ass_attribute1 is null) OR system_person_type = 'CWK'
+            )
+            THEN '40H'
+            WHEN (
+							information1 = 'EXEMPT' AND ass_attribute1 IS NULL
+						)
+            THEN 'SAL'
+						WHEN (
+              ass_attribute1 IS NULL OR (work_at_home = 'Y' AND information1 = 'NONEXEMPT')
+            )
+            THEN '40HND'
+          END
+        )
+        ELSE ''
+      END
+    ) AS alt_employee_category_1,
+    MAX(CASE WHEN rn = 2 THEN position_code END) AS alt_workday_positionid_1,
+    MAX(CASE WHEN rn = 2 THEN seniority_date END) AS alt_seniority_date_1,
+    MAX(CASE WHEN rn = 3 THEN effective_start_date END) AS alt_wheneffective_2,
+    MAX(CASE WHEN rn = 3 THEN segment1 END) AS alt_organizationunit_4_trunk_2,
+    MAX(CASE WHEN rn = 3 THEN segment2 END) AS alt_organizationunit_6_branch_2,
+    MAX(CASE WHEN rn = 3 THEN job_code END) AS alt_jobclass_2,
+    MAX(
+      CASE
+        WHEN rn = 3
+        THEN (
+          CASE
+            WHEN (
+              (information1 = 'NONEXEMPT' AND work_at_home != 'Y' AND ass_attribute1 is null) OR system_person_type = 'CWK'
+            )
+            THEN '40H'
+            WHEN (
+							information1 = 'EXEMPT' AND ass_attribute1 IS NULL
+						)
+            THEN 'SAL'
+						WHEN (
+              ass_attribute1 IS NULL OR (work_at_home = 'Y' AND information1 = 'NONEXEMPT')
+            )
+            THEN '40HND'
+          END
+        )
+        ELSE ''
+      END
+    ) AS alt_employee_category_2,
+    MAX(CASE WHEN rn = 3 THEN position_code END) AS alt_workday_positionid_2,
+    MAX(CASE WHEN rn = 3 THEN seniority_date END) AS alt_seniority_date_2,
+    MAX(CASE WHEN rn = 4 THEN effective_start_date END) AS alt_wheneffective_3,
+    MAX(CASE WHEN rn = 4 THEN segment1 END) AS alt_organizationunit_4_trunk_3,
+    MAX(CASE WHEN rn = 4 THEN segment2 END) AS alt_organizationunit_6_branch_3,
+    MAX(CASE WHEN rn = 4 THEN job_code END) AS alt_jobclass_3,
+    MAX(
+      CASE
+        WHEN rn = 4
+        THEN (
+          CASE
+            WHEN (
+              (information1 = 'NONEXEMPT' AND work_at_home != 'Y' AND ass_attribute1 is null) OR system_person_type = 'CWK'
+            )
+            THEN '40H'
+            WHEN (
+							information1 = 'EXEMPT' AND ass_attribute1 IS NULL
+						)
+            THEN 'SAL'
+						WHEN (
+              ass_attribute1 IS NULL OR (work_at_home = 'Y' AND information1 = 'NONEXEMPT')
+            )
+            THEN '40HND'
+          END
+        )
+        ELSE ''
+      END
+    ) AS alt_employee_category_3,
+    MAX(CASE WHEN rn = 4 THEN position_code END) AS alt_workday_positionid_3,
+    MAX(CASE WHEN rn = 4 THEN seniority_date END) AS alt_seniority_date_3,
+    MAX(CASE WHEN rn = 5 THEN effective_start_date END) AS alt_wheneffective_4,
+    MAX(CASE WHEN rn = 5 THEN segment1 END) AS alt_organizationunit_4_trunk_4,
+    MAX(CASE WHEN rn = 5 THEN segment2 END) AS alt_organizationunit_6_branch_4,
+    MAX(CASE WHEN rn = 5 THEN job_code END) AS alt_jobclass_4,
+    MAX(
+      CASE
+        WHEN rn = 5
+        THEN (
+          CASE
+            WHEN (
+              (information1 = 'NONEXEMPT' AND work_at_home != 'Y' AND ass_attribute1 is null) OR system_person_type = 'CWK'
+            )
+            THEN '40H'
+            WHEN (
+							information1 = 'EXEMPT' AND ass_attribute1 IS NULL
+						)
+            THEN 'SAL'
+						WHEN (
+              ass_attribute1 IS NULL OR (work_at_home = 'Y' AND information1 = 'NONEXEMPT')
+            )
+            THEN '40HND'
+          END
+        )
+        ELSE ''
+      END
+    ) AS alt_employee_category_4,
+    MAX(CASE WHEN rn = 5 THEN position_code END) AS alt_workday_positionid_4,
+    MAX(CASE WHEN rn = 5 THEN seniority_date END) AS alt_seniority_date_4,
+    MAX(CASE WHEN rn = 6 THEN effective_start_date END) AS alt_wheneffective_5,
+    MAX(CASE WHEN rn = 6 THEN segment1 END) AS alt_organizationunit_4_trunk_5,
+    MAX(CASE WHEN rn = 6 THEN segment2 END) AS alt_organizationunit_6_branch_5,
+    MAX(CASE WHEN rn = 6 THEN job_code END) AS alt_jobclass_5,
+    MAX(
+      CASE
+        WHEN rn = 6
+        THEN (
+          CASE
+            WHEN (
+              (information1 = 'NONEXEMPT' AND work_at_home != 'Y' AND ass_attribute1 is null) OR system_person_type = 'CWK'
+            )
+            THEN '40H'
+            WHEN (
+							information1 = 'EXEMPT' AND ass_attribute1 IS NULL
+						)
+            THEN 'SAL'
+						WHEN (
+              ass_attribute1 IS NULL OR (work_at_home = 'Y' AND information1 = 'NONEXEMPT')
+            )
+            THEN '40HND'
+          END
+        )
+        ELSE ''
+      END
+    ) AS alt_employee_category_5,
+    MAX(CASE WHEN rn = 6 THEN position_code END) AS alt_workday_positionid_5,
+    MAX(CASE WHEN rn = 6 THEN seniority_date END) AS alt_seniority_date_5,
+    MAX(CASE WHEN rn = 7 THEN effective_start_date END) AS alt_wheneffective_6,
+    MAX(CASE WHEN rn = 7 THEN segment1 END) AS alt_organizationunit_4_trunk_6,
+    MAX(CASE WHEN rn = 7 THEN segment2 END) AS alt_organizationunit_6_branch_6,
+    MAX(CASE WHEN rn = 7 THEN job_code END) AS alt_jobclass_6,
+    MAX(
+      CASE
+        WHEN rn = 7
+        THEN (
+          CASE
+            WHEN (
+              (information1 = 'NONEXEMPT' AND work_at_home != 'Y' AND ass_attribute1 is null) OR system_person_type = 'CWK'
+            )
+            THEN '40H'
+            WHEN (
+							information1 = 'EXEMPT' AND ass_attribute1 IS NULL
+						)
+            THEN 'SAL'
+						WHEN (
+              ass_attribute1 IS NULL OR (work_at_home = 'Y' AND information1 = 'NONEXEMPT')
+            )
+            THEN '40HND'
+          END
+        )
+        ELSE ''
+      END
+    ) AS alt_employee_category_6,
+    MAX(CASE WHEN rn = 7 THEN position_code END) AS alt_workday_positionid_6,
+    MAX(CASE WHEN rn = 7 THEN seniority_date END) AS alt_seniority_date_6,
+    MAX(CASE WHEN rn = 8 THEN effective_start_date END) AS alt_wheneffective_7,
+    MAX(CASE WHEN rn = 8 THEN segment1 END) AS alt_organizationunit_4_trunk_7,
+    MAX(CASE WHEN rn = 8 THEN segment2 END) AS alt_organizationunit_6_branch_7,
+    MAX(CASE WHEN rn = 8 THEN job_code END) AS alt_jobclass_7,
+    MAX(
+      CASE
+        WHEN rn = 8
+        THEN (
+          CASE
+            WHEN (
+              (information1 = 'NONEXEMPT' AND work_at_home != 'Y' AND ass_attribute1 is null) OR system_person_type = 'CWK'
+            )
+            THEN '40H'
+            WHEN (
+							information1 = 'EXEMPT' AND ass_attribute1 IS NULL
+						)
+            THEN 'SAL'
+						WHEN (
+              ass_attribute1 IS NULL OR (work_at_home = 'Y' AND information1 = 'NONEXEMPT')
+            )
+            THEN '40HND'
+          END
+        )
+        ELSE ''
+      END
+    ) AS alt_employee_category_7,
+    MAX(CASE WHEN rn = 8 THEN position_code END) AS alt_workday_positionid_7,
+    MAX(CASE WHEN rn = 8 THEN seniority_date END) AS alt_seniority_date_7
+  FROM active_assignments
+  GROUP BY person_id
+  ORDER BY person_id
+), emp_phones AS (
+  SELECT pp.person_id,
+    pp.area_code,
+    REPLACE(pp.phone_number, '-', '') AS phone_number,
+    DECODE(pp.phone_type, 'H1', 'Mobile', 'HM', 'Mobile', 'W1', 'Work', 'WM', 'Work', pp.phone_type) AS phone_type,
+    ROW_NUMBER() OVER (
+      PARTITION BY pp.person_id
+      ORDER BY CASE WHEN pp.phone_id = papf.primary_phone_id THEN 0 ELSE 1 END, pp.creation_date DESC
+    ) AS rn
+  FROM per_phones pp
+  INNER JOIN per_all_people_f papf
+    ON pp.person_id = papf.person_id
+  WHERE TRUNC(SYSDATE) BETWEEN papf.effective_start_date AND papf.effective_end_date
+), emp_phones_pivot AS (
+  SELECT person_id,
+    MAX(CASE WHEN rn = 1 THEN area_code END) AS phone_area_code_1,
+    MAX(CASE WHEN rn = 1 THEN phone_number END) AS phone_number_1,
+    MAX(CASE WHEN rn = 1 THEN phone_type END) AS phone_classification_1,
+    MAX(CASE WHEN rn = 2 THEN area_code END) AS phone_area_code_2,
+    MAX(CASE WHEN rn = 2 THEN phone_number END) AS phone_number_2,
+    MAX(CASE WHEN rn = 2 THEN phone_type END) AS phone_classification_2,
+    MAX(CASE WHEN rn = 3 THEN area_code END) AS phone_area_code_3,
+    MAX(CASE WHEN rn = 3 THEN phone_number END) AS phone_number_3,
+    MAX(CASE WHEN rn = 3 THEN phone_type END) AS phone_classification_3
+  FROM emp_phones
+  GROUP BY person_id
+  ORDER BY person_id
+), emp_emails AS (
+  SELECT pea.person_id,
+    pea.email_address,
+    ROW_NUMBER() OVER (
+      PARTITION BY pea.person_id
+      ORDER BY CASE WHEN papf.primary_email_id = pea.email_address_id THEN 0 ELSE 1 END, pea.creation_date DESC
+    ) AS rn
+  FROM per_email_addresses pea
+  INNER JOIN per_all_people_f papf
+    ON pea.person_id = papf.person_id
+  WHERE TRUNC(SYSDATE) BETWEEN papf.effective_start_date AND papf.effective_end_date
+), emp_emails_pivot AS (
+  SELECT person_id,
+    MAX(CASE WHEN rn = 1 THEN email_address END) AS emailaddress_emailaddress_1,
+    MAX(CASE WHEN rn = 2 THEN email_address END) AS emailaddress_emailaddress_2
+  FROM emp_emails
+  GROUP BY person_id
+  ORDER BY person_id
+), accrual_details AS (
+  SELECT appe.person_id,
+    DECODE(
+      aapv.name,
+      'Earned Time Bank',
+      'ETB',
+      'Paid Time Off',
+      'PTO',
+      'Provider PTO',
+      'Provider PTO',
+      'Continued Illness Bank',
+      'CIB',
+      aapv.name
+    ) AS name,
+    '00000' || TO_CHAR(apae.end_bal * 1000) AS end_bal,
+    CASE
+      WHEN aapv.name = TRIM(SUBSTR(:p_absence_name, 1, INSTR(:p_absence_name, ',') - 1))
+      THEN 1
+      WHEN aapv.name = TRIM(
+        SUBSTR(
+          :p_absence_name,
+          INSTR(:p_absence_name, ',') + 1,
+          INSTR(:p_absence_name, ',', 1, 2) - INSTR(:p_absence_name, ',') - 1
+        )
+      )
+      THEN 2
+      WHEN aapv.name = TRIM(
+        SUBSTR(
+          :p_absence_name,
+          INSTR(:p_absence_name, ',', 1, 2) + 1,
+          INSTR(:p_absence_name, ',', 1, 3) - INSTR(:p_absence_name, ',', 1, 2) - 1
+        )
+      )
+      THEN 3
+      WHEN aapv.name = TRIM(SUBSTR(:p_absence_name, INSTR(:p_absence_name, ',', 1, 3) + 1))
+      THEN 4
+    END AS rn
+  FROM anc_per_plan_enrollment appe
+  INNER JOIN (
+    SELECT a.person_id,
+      a.plan_id,
+      a.per_plan_enrt_id,
+      MAX(a.accrual_period) AS accrual_period
+    FROM anc_per_accrual_entries a 
+    WHERE a.status = 'A'
+			AND a.accrual_period <= TO_DATE(:p_effective_date, 'YYYY-MM-DD')
+    GROUP BY a.person_id,
+      a.plan_id,
+      a.per_plan_enrt_id
+  ) ma
+    ON (
+      ma.person_id = appe.person_id
+      AND ma.plan_id = appe.plan_id
+      AND ma.per_plan_enrt_id = appe.per_plan_enrt_id
+    )
+  INNER JOIN anc_per_accrual_entries apae
+    ON (
+      apae.person_id = ma.person_id
+      AND apae.plan_id = ma.plan_id
+      AND apae.per_plan_enrt_id = ma.per_plan_enrt_id
+      AND apae.accrual_period = ma.accrual_period
+    )
+  INNER JOIN anc_absence_plans_vl aapv
+    ON appe.plan_id = aapv.absence_plan_id
+  WHERE TO_DATE(:p_effective_date, 'YYYY-MM-DD') BETWEEN appe.enrt_st_dt AND appe.enrt_end_dt
+    AND TRUNC(SYSDATE) BETWEEN aapv.effective_start_date AND aapv.effective_end_date
+    AND appe.status = 'A'
+    AND apae.status = 'A'
+    AND TRIM(aapv.name) IN (
+      TRIM(SUBSTR(:p_absence_name, 1, INSTR(:p_absence_name, ',', 1, 1) - 1)),
+      TRIM(
+        SUBSTR(
+          :p_absence_name,
+          INSTR(:p_absence_name, ',', 1, 1) + 1,
+          INSTR(:p_absence_name, ',', 1, 2) - INSTR(:p_absence_name, ',', 1, 1) - 1
+        )
+      ),
+      TRIM(
+        SUBSTR(
+          :p_absence_name,
+          INSTR(:p_absence_name, ',', 1, 2) + 1,
+          INSTR(:p_absence_name, ',', 1, 3) - INSTR(:p_absence_name, ',', 1, 2) - 1
+        )
+      ),
+      TRIM(SUBSTR(:p_absence_name, INSTR(:p_absence_name, ',', 1, 3) + 1))
+    )
+), accrual_details_list_agg AS (
+  SELECT person_id,
+    LISTAGG(rn, ',') WITHIN GROUP (ORDER BY rn) AS rn_list
+  FROM accrual_details
+  GROUP BY person_id
+), accrual_details_pivot AS (
+  SELECT ad.person_id,
+    MAX(
+      CASE
+        WHEN adla.rn_list LIKE '1%' OR adla.rn_list LIKE '1,2%' OR adla.rn_list LIKE '1,3%'
+        THEN (
+          CASE WHEN ad.rn = 1 THEN ad.name END
+        )
+        WHEN adla.rn_list LIKE '2%'
+        THEN (
+          CASE WHEN ad.rn = 2 THEN ad.name END
+        )
+        WHEN adla.rn_list LIKE '3%'
+        THEN (
+          CASE WHEN ad.rn = 3 THEN ad.name END
+        )
+      END
+    ) AS benefit_category_code_1,
+    MAX(
+      CASE
+        WHEN adla.rn_list LIKE '1%' OR adla.rn_list LIKE '1,2%' OR adla.rn_list LIKE '1,3%'
+        THEN (
+          CASE WHEN ad.rn = 1 THEN ad.end_bal END
+        )
+        WHEN adla.rn_list LIKE '2%'
+        THEN (
+          CASE WHEN ad.rn = 2 THEN ad.end_bal END
+        )
+        WHEN adla.rn_list LIKE '3%'
+        THEN (
+          CASE WHEN ad.rn = 3 THEN ad.end_bal END
+        )
+      END
+    ) AS benefit_beginning_balance_1,
+    MAX(CASE WHEN ad.rn = 4 THEN ad.name END) AS benefit_category_code_2,
+    MAX(CASE WHEN ad.rn = 4 THEN ad.end_bal END) AS benefit_beginning_balance_2,
+    MAX(
+      CASE
+        WHEN adla.rn_list LIKE '%1%' AND adla.rn_list LIKE '%2%'
+        THEN (
+          CASE WHEN ad.rn = 2 THEN ad.name END
+        )
+      END
+    ) AS benefit_category_code_3,
+    MAX(
+      CASE
+        WHEN adla.rn_list LIKE '%1%' AND adla.rn_list LIKE '%2%'
+        THEN (
+          CASE WHEN ad.rn = 2 THEN ad.end_bal END
+        )
+      END
+    ) AS benefit_beginning_balance_3
+  FROM accrual_details ad
+  INNER JOIN accrual_details_list_agg adla
+    ON adla.person_id = ad.person_id
+  GROUP BY ad.person_id,
+    adla.rn_list
+), element_entries AS (
+  SELECT peef.person_id,
+    MAX(
+      CASE
+        WHEN petf.base_element_name = TRIM(SUBSTR(:p_element_name, 1, INSTR(:p_element_name, ',') - 1))
+        THEN 1
+        ELSE 0
+      END
+    ) AS home_status_code,
+    MAX(
+      CASE
+        WHEN petf.base_element_name = TRIM(
+          SUBSTR(
+            :p_element_name,
+            INSTR(:p_element_name, ',') + 1,
+            INSTR(:p_element_name, ',', 1, 2) - INSTR(:p_element_name, ',') - 1
+          )
+        )
+        THEN 1
+        ELSE 0
+      END
+    ) AS or_medtronic_eligibility,
+    MAX(
+      CASE
+        WHEN petf.base_element_name = TRIM(
+          SUBSTR(
+            :p_element_name,
+            INSTR(:p_element_name, ',', 1, 2) + 1,
+            INSTR(:p_element_name, ',', 1, 3) - INSTR(:p_element_name, ',', 1, 2) - 1
+          )
+        )
+        THEN 1
+        ELSE 0
+      END
+    ) AS preceptor_eligibility,
+    MAX(
+      CASE
+        WHEN petf.base_element_name = TRIM(SUBSTR(:p_element_name, INSTR(:p_element_name, ',', 1, 3) + 1))
+        THEN 1
+        ELSE 0
+      END
+    ) AS lead_eligibility
+  FROM pay_element_entries_f peef
+  INNER JOIN pay_element_types_f petf
+    ON peef.element_type_id = petf.element_type_id
+  WHERE petf.base_element_name IN (
+      TRIM(SUBSTR(:p_element_name, 1, INSTR(:p_element_name, ',', 1, 1) - 1)),
+      TRIM(
+        SUBSTR(
+          :p_element_name,
+          INSTR(:p_element_name, ',', 1, 1) + 1,
+          INSTR(:p_element_name, ',', 1, 2) - INSTR(:p_element_name, ',', 1, 1) - 1
+        )
+      ),
+      TRIM(
+        SUBSTR(
+          :p_element_name,
+          INSTR(:p_element_name, ',', 1, 2) + 1,
+          INSTR(:p_element_name, ',', 1, 3) - INSTR(:p_element_name, ',', 1, 2) - 1
+        )
+      ),
+      TRIM(SUBSTR(:p_element_name, INSTR(:p_element_name, ',', 1, 3) + 1))
+    )
+  GROUP BY peef.person_id
+), emp_addresses AS (
+  SELECT ppauf.person_id,
+    paf.address_line_1 AS address_addressline1_1,
+    paf.town_or_city AS address_municipality_1,
+    paf.region_2 AS address_statecode_1,
+    paf.postal_code AS address_postal_code_1,
+		'Check' as address_classification_1,
+		'1' as address_priority_order_1
+  FROM (
+    SELECT max_lud.person_id,
+      MAX(max_lud.last_update_date) AS last_update_date
+    FROM per_person_addr_usages_f max_lud
+    WHERE TRUNC(SYSDATE) BETWEEN max_lud.effective_start_date AND max_lud.effective_end_date
+      AND max_lud.address_type = 'HOME'
+    GROUP BY max_lud.person_id
+  ) ppauf_lud
+  INNER JOIN per_person_addr_usages_f ppauf
+    ON (
+      ppauf.person_id = ppauf_lud.person_id
+      AND ppauf.last_update_date = ppauf_lud.last_update_date
+    )
+  INNER JOIN per_addresses_f paf
+    ON paf.address_id = ppauf.address_id
+  WHERE TRUNC(SYSDATE) BETWEEN ppauf.effective_start_date AND ppauf.effective_end_date
+    AND TRUNC(SYSDATE) BETWEEN paf.effective_start_date AND paf.effective_end_date
+    AND ppauf.address_type = 'HOME'
+)
+SELECT TO_NUMBER(SUBSTR(papf.person_number, 3)) AS employee_code,
+  '' AS barcode_badge_number_1,
+  '' AS magstripe_badge_number_1,
+  aap.proximity_badge_number_1,
+  ppnf.first_name AS first_name,
+  ppnf.last_name AS last_name,
+  ppnf.middle_names AS middle_name,
+  'A' AS employee_status,
+  '' AS pin,
+  '' AS password,
+  pea.email_address AS login_name,
+  '' AS login_number,
+  TO_CHAR(ppos.date_start, 'MMDDYYYY') AS hire_date,
+  TO_CHAR(ppos.actual_termination_date, 'MMDDYYYY') AS termination_date,
+  TO_CHAR(pp.date_of_birth, 'MMDDYYYY') AS birth_date,
+  '' AS rehire_date,
+  '' AS adjusted_service_date, -- TBD Column
+  TO_CHAR(ppos.date_start, 'MMDDYYYY') AS benefit_eligibility_date,
+  '' AS type_1_family_leave_start_date,
+  aap.home_wheneffective_1,
+  aap.home_organizationunit_4_trunk_1,
+  aap.home_organizationunit_6_branch_1,
+  '' AS home_organizationunit_7_leaf_1,
+  aap.home_jobclass_1,
+  '' AS home_position_1,
+  aap.home_paygroup_1,
+  aap.home_employee_category_1,
+  aap.home_employee_class_1,
+  DECODE(
+    TRIM(SUBSTR(aap.home_shift_1, 1, INSTR(aap.home_shift_1, ' ') - 1)),
+    'Day',
+    '1',
+    'Evening',
+    '2',
+    'Evng',
+    '2',
+    'Night',
+    '3'
+  ) AS home_shift_1,
+  aap.home_approved_hours_1,
+  '' AS home_daily_overtime_hours_1,
+  '40' AS home_weekly_overtime_hours_1,
+  REGEXP_REPLACE(aap.home_shift_1, '[^0-9]', '') AS home_daily_hours_1,
+  '' AS home_seniority_code_1,
+  '' AS home_payroll_group_code_1,
+  CASE WHEN aap.home_union_code_1 = 'MNA-25' THEN 'MNA' WHEN aap.home_union_code_1 IS NOT NULL THEN aap.home_union_code_1 ELSE 'NU' END AS home_union_code_1,
+  CASE WHEN ee.home_status_code = 1 THEN 'CERT' ELSE 'NON' END AS home_status_code_1,
+  '' AS home_grade_1,
+  '' AS home_pay_rate_1,
+  '' AS home_full_time_equivalent_1,
+  aap.home_seniority_date_1,
+  aap.home_workday_positionid_1,
+  aap.alt_wheneffective_1,
+  aap.alt_organizationunit_4_trunk_1,
+  aap.alt_organizationunit_6_branch_1,
+  '' AS alt_organizationunit_7_leaf_1,
+  aap.alt_jobclass_1,
+  '' AS alt_position_1,
+  aap.alt_employee_category_1,
+  '' AS alt_pay_rate_1,
+  '' AS alt_full_time_equivalent_1,
+  aap.alt_seniority_date_1,
+  aap.alt_workday_positionid_1,
+  aap.alt_wheneffective_2,
+  aap.alt_organizationunit_4_trunk_2,
+  aap.alt_organizationunit_6_branch_2,
+  '' AS alt_organizationunit_7_leaf_2,
+  aap.alt_jobclass_2,
+  '' AS alt_position_2,
+  aap.alt_employee_category_2,
+  '' AS alt_pay_rate_2,
+  '' AS alt_full_time_equivalent_2,
+  aap.alt_seniority_date_2,
+  aap.alt_workday_positionid_2,
+  aap.alt_wheneffective_3,
+  aap.alt_organizationunit_4_trunk_3,
+  aap.alt_organizationunit_6_branch_3,
+  '' AS alt_organizationunit_7_leaf_3,
+  aap.alt_jobclass_3,
+  '' AS alt_position_3,
+  aap.alt_employee_category_3,
+  '' AS alt_pay_rate_3,
+  '' AS alt_full_time_equivalent_3,
+  aap.alt_seniority_date_3,
+  aap.alt_workday_positionid_3,
+  aap.alt_wheneffective_4,
+  aap.alt_organizationunit_4_trunk_4,
+  aap.alt_organizationunit_6_branch_4,
+  '' AS alt_organizationunit_7_leaf_4,
+  aap.alt_jobclass_4,
+  '' AS alt_position_4,
+  aap.alt_employee_category_4,
+  '' AS alt_pay_rate_4,
+  '' AS alt_full_time_equivalent_4,
+  aap.alt_seniority_date_4,
+  aap.alt_workday_positionid_4,
+  aap.alt_wheneffective_5,
+  aap.alt_organizationunit_4_trunk_5,
+  aap.alt_organizationunit_6_branch_5,
+  '' AS alt_organizationunit_7_leaf_5,
+  aap.alt_jobclass_5,
+  '' AS alt_position_5,
+  aap.alt_employee_category_5,
+  '' AS alt_pay_rate_5,
+  '' AS alt_full_time_equivalent_5,
+  aap.alt_seniority_date_5,
+  aap.alt_workday_positionid_5,
+  aap.alt_wheneffective_6,
+  aap.alt_organizationunit_4_trunk_6,
+  aap.alt_organizationunit_6_branch_6,
+  '' AS alt_organizationunit_7_leaf_6,
+  aap.alt_jobclass_6,
+  '' AS alt_position_6,
+  aap.alt_employee_category_6,
+  '' AS alt_pay_rate_6,
+  '' AS alt_full_time_equivalent_6,
+  aap.alt_seniority_date_6,
+  aap.alt_workday_positionid_6,
+  aap.alt_wheneffective_7,
+  aap.alt_organizationunit_4_trunk_7,
+  aap.alt_organizationunit_6_branch_7,
+  '' AS alt_organizationunit_7_leaf_7,
+  aap.alt_jobclass_7,
+  '' AS alt_position_7,
+  aap.alt_employee_category_7,
+  '' AS alt_pay_rate_7,
+  '' AS alt_full_time_equivalent_7,
+  aap.alt_seniority_date_7,
+  aap.alt_workday_positionid_7,
+  aadp.benefit_category_code_1,
+  aadp.benefit_beginning_balance_1,
+  aadp.benefit_category_code_2,
+  aadp.benefit_beginning_balance_2,
+  aadp.benefit_category_code_3,
+  aadp.benefit_beginning_balance_3,
+  ea.address_addressline1_1,
+  ea.address_municipality_1,
+  ea.address_statecode_1,
+  ea.address_postal_code_1,
+	ea.address_classification_1,
+	ea.address_priority_order_1,
+	'' as address_addressline1_2,
+	'' as address_municipality_2,
+	'' as address_statecode_2,
+	'' as address_postal_code_2,
+	'' as address_classification_2,
+	'' as address_priority_order_2,
+	ppp.phone_area_code_1,
+	ppp.phone_number_1,
+	'' as phone_extension_1,
+	ppp.phone_classification_1,
+	CASE WHEN ppp.phone_number_1 IS NOT NULL THEN '1' ELSE '' END AS phone_priority_order_1,
+	ppp.phone_area_code_2,
+	ppp.phone_number_2,
+	'' as phone_extension_2,
+	ppp.phone_classification_2,
+	CASE WHEN ppp.phone_number_2 IS NOT NULL THEN '2' ELSE '' END AS phone_priority_order_2,
+	ppp.phone_area_code_3,
+	ppp.phone_number_3,
+	'' as phone_extension_3,
+	ppp.phone_classification_3,
+	CASE WHEN ppp.phone_number_3 IS NOT NULL THEN '3' ELSE '' END AS phone_priority_order_3,
+  eep.emailaddress_emailaddress_1,
+  '1' AS emailaddress_priorityorder_1,
+  eep.emailaddress_emailaddress_2,
+  CASE WHEN eep.emailaddress_emailaddress_2 IS NOT NULL THEN '2' ELSE '' END AS emailaddress_priorityorder_2,
+  CASE WHEN ee.preceptor_eligibility = 1 THEN 'Y' ELSE 'N' END AS preceptor_eligibility,
+  CASE WHEN ee.lead_eligibility = 1 THEN 'Y' ELSE 'N' END AS lead_eligibility,
+  CASE WHEN ee.or_medtronic_eligibility = 1 THEN 'Y' ELSE 'N' END AS or_medtronic_eligibility,
+  aap.remote_worker,
+  CASE
+    WHEN aap.home_organizationunit_4_trunk_1 IS NOT NULL
+    AND aap.home_organizationunit_6_branch_1 IS NOT NULL
+    THEN aap.home_organizationunit_4_trunk_1 || '.' || aap.home_organizationunit_6_branch_1
+    ELSE NULL
+  END AS paramconcat1,
+  CASE
+    WHEN aap.alt_organizationunit_4_trunk_1 IS NOT NULL
+    AND aap.alt_organizationunit_6_branch_1 IS NOT NULL
+    THEN aap.alt_organizationunit_4_trunk_1 || '.' || aap.alt_organizationunit_6_branch_1
+    ELSE NULL
+  END AS paramconcat2,
+  CASE
+    WHEN aap.alt_organizationunit_4_trunk_2 IS NOT NULL
+    AND aap.alt_organizationunit_6_branch_2 IS NOT NULL
+    THEN aap.alt_organizationunit_4_trunk_2 || '.' || aap.alt_organizationunit_6_branch_2
+    ELSE NULL
+  END AS paramconcat3,
+  CASE
+    WHEN aap.alt_organizationunit_4_trunk_3 IS NOT NULL
+    AND aap.alt_organizationunit_6_branch_3 IS NOT NULL
+    THEN aap.alt_organizationunit_4_trunk_3 || '.' || aap.alt_organizationunit_6_branch_3
+    ELSE NULL
+  END AS paramconcat4,
+  CASE
+    WHEN aap.alt_organizationunit_4_trunk_4 IS NOT NULL
+    AND aap.alt_organizationunit_6_branch_4 IS NOT NULL
+    THEN aap.alt_organizationunit_4_trunk_4 || '.' || aap.alt_organizationunit_6_branch_4
+    ELSE NULL
+  END AS paramconcat5,
+  CASE
+    WHEN aap.alt_organizationunit_4_trunk_5 IS NOT NULL
+    AND aap.alt_organizationunit_6_branch_5 IS NOT NULL
+    THEN aap.alt_organizationunit_4_trunk_5 || '.' || aap.alt_organizationunit_6_branch_5
+    ELSE NULL
+  END AS paramconcat6,
+  CASE
+    WHEN aap.alt_organizationunit_4_trunk_6 IS NOT NULL
+    AND aap.alt_organizationunit_6_branch_6 IS NOT NULL
+    THEN aap.alt_organizationunit_4_trunk_6 || '.' || aap.alt_organizationunit_6_branch_6
+    ELSE NULL
+  END AS paramconcat7,
+  CASE
+    WHEN aap.alt_organizationunit_4_trunk_7 IS NOT NULL
+    AND aap.alt_organizationunit_6_branch_7 IS NOT NULL
+    THEN aap.alt_organizationunit_4_trunk_7 || '.' || aap.alt_organizationunit_6_branch_7
+    ELSE NULL
+  END AS paramconcat8
+FROM per_all_people_f papf
+INNER JOIN per_person_names_f ppnf
+  ON papf.person_id = ppnf.person_id
+INNER JOIN acitve_assignments_pivot aap
+  ON papf.person_id = aap.person_id
+INNER JOIN per_email_addresses pea
+  ON papf.person_id = pea.person_id
+INNER JOIN (
+  SELECT person_id,
+    MAX(period_of_service_id) AS period_of_service_id
+  FROM per_periods_of_service
+  GROUP BY person_id
+) p_hire_join
+  ON p_hire_join.person_id = papf.person_id
+INNER JOIN per_periods_of_service ppos
+  ON (
+    p_hire_join.person_id = ppos.person_id
+    AND p_hire_join.period_of_service_id = ppos.period_of_service_id
+  )
+INNER JOIN per_persons pp
+  ON papf.person_id = pp.person_id
+INNER JOIN emp_phones_pivot ppp
+  ON papf.person_id = ppp.person_id
+INNER JOIN emp_emails_pivot eep
+  ON papf.person_id = eep.person_id
+LEFT OUTER JOIN accrual_details_pivot aadp
+  ON papf.person_id = aadp.person_id
+/* left outer join (select person_id, max(period_of_service_id)as period_of_service_id from per_periods_of_service group by person_id)p_ter_join on p_ter_join.person_id = papf.person_id */ /* left outer join per_periods_of_service ppfs on (p_ter_join.person_id = ppfs.person_id and p_ter_join.period_of_service_id = ppfs.period_of_service_id) */
+LEFT OUTER JOIN emp_addresses ea
+  ON papf.person_id = ea.person_id
+LEFT OUTER JOIN element_entries ee
+  ON ee.person_id = papf.person_id
+WHERE TRUNC(SYSDATE) BETWEEN papf.effective_start_date AND papf.effective_end_date
+  AND TRUNC(SYSDATE) BETWEEN ppnf.effective_start_date AND ppnf.effective_end_date
+  AND ppnf.name_type = 'GLOBAL'
+  AND pea.email_type = 'W1'
+UNION
+SELECT TO_NUMBER(SUBSTR(papf.person_number, 3)) AS employee_code,
+  '' AS barcode_badge_number_1,
+  '' AS magstripe_badge_number_1,
+  paam.ass_attribute1 AS proximity_badge_number_1,
+  ppnf.first_name AS first_name,
+  ppnf.last_name AS last_name,
+  ppnf.middle_names AS middle_name,
+  'I' AS employee_status,
+  '' AS pin,
+  '' AS password,
+  pea.email_address || '_Terminated' AS login_name,
+  '' AS login_number,
+  TO_CHAR(ppos.date_start, 'MMDDYYYY') AS hire_date,
+  TO_CHAR(ppos.actual_termination_date, 'MMDDYYYY') AS termination_date,
+  TO_CHAR(pp.date_of_birth, 'MMDDYYYY') AS birth_date,
+  '' AS rehire_date,
+  '' AS adjusted_service_date, -- TBD Column
+  TO_CHAR(ppos.date_start, 'MMDDYYYY') AS benefit_eligibility_date,
+  '' AS type_1_family_leave_start_date,
+  TO_CHAR(paam.effective_start_date, 'MMDDYYYY') AS home_wheneffective_1,
+  -- hroie.org_information3 AS home_organizationunit_4_trunk_1,
+  -- hroie.org_information1 AS home_organizationunit_6_branch_1,
+	pcaa.segment1 as home_organizationunit_4_trunk_1,
+	pcaa.segment2 as home_organizationunit_6_branch_1,
+  '' AS home_organizationunit_7_leaf_1,
+  pjf.job_code AS home_jobclass_1,
+  '' AS home_position_1,
+  -- hroie.org_information3 AS home_paygroup_1,
+	pcaa.segment1 as home_paygroup_1,
+  CASE
+		WHEN (
+      (pjlf.information1 = 'NONEXEMPT' AND paam.work_at_home != 'Y' AND paam.ass_attribute1 IS NULL) OR paam.system_person_type = 'CWK'
+    )
+    THEN '40H'
+    WHEN pjlf.information1 = 'EXEMPT' AND paam.ass_attribute1 IS NULL
+    THEN 'SAL'
+    WHEN (
+      paam.ass_attribute1 IS NULL OR (paam.work_at_home = 'Y' AND pjlf.information1 = 'NONEXEMPT')
+    )
+    THEN '40HND'
+    ELSE ''
+  END AS home_employee_category_1,
+  CASE
+    WHEN paam.system_person_type = 'CWK'
+    THEN 'IS-B'
+    WHEN pjfft.job_family_name IN ('Physicians', 'Advanced Practice Providers')
+    THEN 'MD'
+    WHEN hlm.meaning = 'Manager'
+    THEN 'MGR'
+    WHEN hlm.meaning IN ('Director', 'Executive Director')
+    THEN 'DIR'
+    WHEN hlm.meaning IN ('Vice President', 'Chief Executive Officer', 'C-Suite')
+    THEN 'EX'
+    WHEN paam.employment_category = 'PRN'
+    THEN (
+      CASE WHEN pptl.user_person_type NOT LIKE '%Seasonal%' THEN 'PD' ELSE '60-71' END
+    )
+    ELSE (
+      CASE WHEN (
+        2 * paam.normal_hours
+      ) <= 71 THEN '60-71' ELSE '72-80' END
+    )
+  END AS home_employee_class_1,
+  DECODE(
+    TRIM(SUBSTR(paam.ass_attribute3, 1, INSTR(paam.ass_attribute3, ' ') - 1)),
+    'Day',
+    '1',
+    'Evening',
+    '2',
+    'Evng',
+    '2',
+    'Night',
+    '3'
+  ) AS home_shift_1,
+  CASE
+    WHEN normal_hours IS NOT NULL
+    THEN TO_CHAR(2 * normal_hours) || '00'
+    ELSE ''
+  END AS home_approved_hours_1,
+  '' AS home_daily_overtime_hours_1,
+  '40' AS home_weekly_overtime_hours_1,
+  REGEXP_REPLACE(paam.ass_attribute3, '[^0-9]', '') AS home_daily_hours_1,
+  '' AS home_seniority_code_1,
+  '' AS home_payroll_group_code_1,
+  CASE
+		WHEN paam.bargaining_unit_code = 'MNA-25' 
+		THEN 'MNA'
+    WHEN paam.bargaining_unit_code IS NOT NULL
+    THEN paam.bargaining_unit_code
+    ELSE 'NU'
+  END AS home_union_code_1,
+  CASE WHEN ee.home_status_code = 1 THEN 'CERT' ELSE 'NON' END AS home_status_code_1,
+  '' AS home_grade_1,
+  '' AS home_pay_rate_1,
+  '' AS home_full_time_equivalent_1,
+  TO_CHAR(psdf.seniority_date, 'MMDDYYYY') AS home_seniority_date_1,
+  hapf.position_code AS home_workday_positionid_1,
+  NULL AS alt_wheneffective_1,
+  '' AS alt_organizationunit_4_trunk_1,
+  '' AS alt_organizationunit_6_branch_1,
+  '' AS alt_organizationunit_7_leaf_1,
+  '' AS alt_jobclass_1,
+  '' AS alt_position_1,
+  '' AS alt_employee_category_1,
+  '' AS alt_pay_rate_1,
+  '' AS alt_full_time_equivalent_1,
+  '' AS alt_seniority_date_1,
+  '' AS alt_workday_positionid_1,
+  NULL AS alt_wheneffective_2,
+  '' AS alt_organizationunit_4_trunk_2,
+  '' AS alt_organizationunit_6_branch_2,
+  '' AS alt_organizationunit_7_leaf_2,
+  '' AS alt_jobclass_2,
+  '' AS alt_position_2,
+  '' AS alt_employee_category_2,
+  '' AS alt_pay_rate_2,
+  '' AS alt_full_time_equivalent_2,
+  '' AS alt_seniority_date_2,
+  '' AS alt_workday_positionid_2,
+  NULL AS alt_wheneffective_3,
+  '' AS alt_organizationunit_4_trunk_3,
+  '' AS alt_organizationunit_6_branch_3,
+  '' AS alt_organizationunit_7_leaf_3,
+  '' AS alt_jobclass_3,
+  '' AS alt_position_3,
+  '' AS alt_employee_category_3,
+  '' AS alt_pay_rate_3,
+  '' AS alt_full_time_equivalent_3,
+  '' AS alt_seniority_date_3,
+  '' AS alt_workday_positionid_3,
+  NULL AS alt_wheneffective_4,
+  '' AS alt_organizationunit_4_trunk_4,
+  '' AS alt_organizationunit_6_branch_4,
+  '' AS alt_organizationunit_7_leaf_4,
+  '' AS alt_jobclass_4,
+  '' AS alt_position_4,
+  '' AS alt_employee_category_4,
+  '' AS alt_pay_rate_4,
+  '' AS alt_full_time_equivalent_4,
+  '' AS alt_seniority_date_4,
+  '' AS alt_workday_positionid_4,
+  NULL AS alt_wheneffective_5,
+  '' AS alt_organizationunit_4_trunk_5,
+  '' AS alt_organizationunit_6_branch_5,
+  '' AS alt_organizationunit_7_leaf_5,
+  '' AS alt_jobclass_5,
+  '' AS alt_position_5,
+  '' AS alt_employee_category_5,
+  '' AS alt_pay_rate_5,
+  '' AS alt_full_time_equivalent_5,
+  '' AS alt_seniority_date_5,
+  '' AS alt_workday_positionid_5,
+  NULL AS alt_wheneffective_6,
+  '' AS alt_organizationunit_4_trunk_6,
+  '' AS alt_organizationunit_6_branch_6,
+  '' AS alt_organizationunit_7_leaf_6,
+  '' AS alt_jobclass_6,
+  '' AS alt_position_6,
+  '' AS alt_employee_category_6,
+  '' AS alt_pay_rate_6,
+  '' AS alt_full_time_equivalent_6,
+  '' AS alt_seniority_date_6,
+  '' AS alt_workday_positionid_6,
+  NULL AS alt_wheneffective_7,
+  '' AS alt_organizationunit_4_trunk_7,
+  '' AS alt_organizationunit_6_branch_7,
+  '' AS alt_organizationunit_7_leaf_7,
+  '' AS alt_jobclass_7,
+  '' AS alt_position_7,
+  '' AS alt_employee_category_7,
+  '' AS alt_pay_rate_7,
+  '' AS alt_full_time_equivalent_7,
+  '' AS alt_seniority_date_7,
+  '' AS alt_workday_positionid_7,
+  aadp.benefit_category_code_1,
+  aadp.benefit_beginning_balance_1,
+  aadp.benefit_category_code_2,
+  aadp.benefit_beginning_balance_2,
+  aadp.benefit_category_code_3,
+  aadp.benefit_beginning_balance_3,
+  ea.address_addressline1_1,
+  ea.address_municipality_1,
+  ea.address_statecode_1,
+  ea.address_postal_code_1,
+  ea.address_classification_1,
+	ea.address_priority_order_1,
+	'' as address_addressline1_2,
+	'' as address_municipality_2,
+	'' as address_statecode_2,
+	'' as ddress_postal_code_2	,
+	'' as address_classification_2,
+	'' as address_priority_order_2,
+	ppp.phone_area_code_1,
+	ppp.phone_number_1,
+	'' as phone_extension_1,
+	ppp.phone_classification_1,
+	CASE WHEN ppp.phone_number_1 IS NOT NULL THEN '1' ELSE '' END AS phone_priority_order_1,
+	ppp.phone_area_code_2,
+	ppp.phone_number_2,
+	'' as phone_extension_2,
+	ppp.phone_classification_2,
+	CASE WHEN ppp.phone_number_2 IS NOT NULL THEN '2' ELSE '' END AS phone_priority_order_2,
+	ppp.phone_area_code_3,
+	ppp.phone_number_3,
+	'' as phone_extension_3,
+	ppp.phone_classification_3,
+	CASE WHEN ppp.phone_number_3 IS NOT NULL THEN '3' ELSE '' END AS phone_priority_order_3,
+  eep.emailaddress_emailaddress_1,
+  '1' AS emailaddress_priorityorder_1,
+  eep.emailaddress_emailaddress_2,
+  CASE WHEN eep.emailaddress_emailaddress_2 IS NOT NULL THEN '2' ELSE '' END AS emailaddress_priorityorder_2,
+  CASE WHEN ee.preceptor_eligibility = 1 THEN 'Y' ELSE 'N' END AS preceptor_eligibility,
+  CASE WHEN ee.lead_eligibility = 1 THEN 'Y' ELSE 'N' END AS lead_eligibility,
+  CASE WHEN ee.or_medtronic_eligibility = 1 THEN 'Y' ELSE 'N' END AS or_medtronic_eligibility,
+  paam.work_at_home AS remote_worker,
+  -- CASE
+    -- WHEN hroie.org_information3 IS NOT NULL AND hroie.org_information1 IS NOT NULL
+    -- THEN hroie.org_information3 || '.' || hroie.org_information1
+    -- ELSE NULL
+  -- END AS paramconcat1,
+	CASE
+    WHEN pcaa.segment1 IS NOT NULL AND pcaa.segment2 IS NOT NULL
+    THEN pcaa.segment1 || '.' || pcaa.segment2
+    ELSE NULL
+  END AS paramconcat1,
+  '' AS paramconcat2,
+  '' AS paramconcat3,
+  '' AS paramconcat4,
+  '' AS paramconcat5,
+  '' AS paramconcat6,
+  '' AS paramconcat7,
+  '' AS paramconcat8
+FROM per_all_people_f papf
+INNER JOIN per_person_names_f ppnf
+  ON papf.person_id = ppnf.person_id
+INNER JOIN per_email_addresses pea
+  ON papf.person_id = pea.person_id
+INNER JOIN (
+  SELECT person_id,
+    MAX(period_of_service_id) AS period_of_service_id
+  FROM per_periods_of_service
+  GROUP BY person_id
+) p_hire_join
+  ON p_hire_join.person_id = papf.person_id
+INNER JOIN per_periods_of_service ppos
+  ON (
+    p_hire_join.person_id = ppos.person_id
+    AND p_hire_join.period_of_service_id = ppos.period_of_service_id
+  )
+/* inner join (select person_id, max(period_of_service_id)as period_of_service_id from per_periods_of_service group by person_id)p_ter_join on p_ter_join.person_id = papf.person_id */ /* inner join per_periods_of_service ppfs on (p_ter_join.person_id = ppfs.person_id and p_ter_join.period_of_service_id = ppfs.period_of_service_id) */
+INNER JOIN per_persons pp
+  ON papf.person_id = pp.person_id
+INNER JOIN (
+  SELECT person_id,
+    MAX(effective_start_date) AS effective_start_date
+  FROM per_all_assignments_m
+  WHERE TRUNC(SYSDATE) BETWEEN effective_start_date AND effective_end_date
+    AND assignment_type IN ('E', 'C')
+    AND assignment_status_type = 'INACTIVE'
+  GROUP BY person_id
+  ORDER BY person_id
+) ia
+  ON papf.person_id = ia.person_id
+INNER JOIN per_all_assignments_m paam
+  ON (
+    ia.person_id = paam.person_id
+    AND ia.effective_start_date = paam.effective_start_date
+  )
+INNER JOIN hr_organization_units_f_tl houft
+  ON houft.organization_id = paam.business_unit_id
+INNER JOIN hr_organization_info_eff_v hroie
+  ON hroie.organization_id = paam.organization_id
+INNER JOIN per_jobs_f pjf
+  ON pjf.job_id = paam.job_id
+INNER JOIN hr_all_positions_f hapf
+  ON hapf.position_id = paam.position_id
+INNER JOIN emp_phones_pivot ppp
+  ON papf.person_id = ppp.person_id
+INNER JOIN emp_emails_pivot eep
+  ON papf.person_id = eep.person_id
+INNER JOIN per_job_family_f_tl pjfft
+  ON pjfft.job_family_id = pjf.job_family_id
+INNER JOIN per_person_types_tl pptl
+  ON pptl.person_type_id = paam.person_type_id
+LEFT OUTER JOIN pay_cost_allocations_f pcaf
+  ON (
+    pcaf.source_id = paam.organization_id
+    AND TRUNC(SYSDATE) BETWEEN pcaf.effective_start_date AND pcaf.effective_end_date
+    AND pcaf.source_type = 'ORG'
+  )
+LEFT OUTER JOIN pay_cost_alloc_accounts pcaa
+  ON pcaa.cost_allocation_record_id = pcaf.cost_allocation_record_id
+LEFT OUTER JOIN per_job_leg_f pjlf
+  ON (
+    pjlf.job_id = pjf.job_id
+    AND TRUNC(SYSDATE) BETWEEN pjlf.effective_start_date AND pjlf.effective_end_date
+    AND pjlf.legislation_code = 'US'
+    AND pjlf.information_category = 'HRX_US_JOBS'
+  )
+LEFT OUTER JOIN per_ext_app_identifiers peai
+	ON (
+		peai.person_id = paam.person_id 
+		AND peai.ext_identifier_type  = 'ORA_TCLOCK_BADGE_ID' 
+		AND TO_DATE(:p_effective_date, 'YYYY-MM-DD') BETWEEN peai.date_from AND peai.date_to
+	)
+LEFT OUTER JOIN accrual_details_pivot aadp
+  ON papf.person_id = aadp.person_id
+LEFT OUTER JOIN emp_addresses ea
+  ON papf.person_id = ea.person_id
+LEFT OUTER JOIN element_entries ee
+  ON papf.person_id = ee.person_id
+LEFT OUTER JOIN per_seniority_dates_f psdf
+  ON paam.person_id = psdf.person_id AND psdf.seniority_date_code = 'LC_PER_LEUSD'
+LEFT OUTER JOIN hr_lookups hlm
+  ON (
+    pjf.manager_level = hlm.lookup_code AND hlm.lookup_type = 'MANAGER_LEVEL'
+  )
+WHERE TRUNC(SYSDATE) BETWEEN papf.effective_start_date AND papf.effective_end_date
+  AND TRUNC(SYSDATE) BETWEEN ppnf.effective_start_date AND ppnf.effective_end_date
+  AND TRUNC(SYSDATE) BETWEEN paam.effective_start_date AND paam.effective_end_date
+  AND TRUNC(SYSDATE) BETWEEN houft.effective_start_date AND houft.effective_end_date
+  AND TRUNC(SYSDATE) BETWEEN pjf.effective_start_date AND pjf.effective_end_date
+  AND TRUNC(SYSDATE) BETWEEN hapf.effective_start_date AND hapf.effective_end_date
+  AND ppnf.name_type = 'GLOBAL'
+  AND pea.email_type = 'W1'
+  AND paam.assignment_type IN ('E', 'C')
+  AND paam.assignment_status_type = 'INACTIVE'
+  AND houft.language = USERENV('LANG')
+  AND UPPER(houft.name) = UPPER(:p_business_unit)
