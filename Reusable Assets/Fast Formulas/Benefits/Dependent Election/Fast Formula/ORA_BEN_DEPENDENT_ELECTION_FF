@@ -1,0 +1,117 @@
+/****************************************************************************** 
+FORMULA NAME: ORA_BEN_DEPENDENT_ELECTION_FF
+FORMULA TYPE: Postelection Edit
+DESCRIPTION : Validates that required dependents or beneficiaries are designated when an employee elects a benefit plan option that requires dependent coverage.
+
+-------------------------------------------------------------------------------
+Name        Date          Version   Comments
+Oracle      06-Feb-2026   1.0       Initial base version
+-------------------------------------------------------------------------------
+******************************************************************************/
+
+/*@section - Default Values*/
+DEFAULT_DATA_VALUE FOR BEN_PEN_PL_NAME_TN             IS 'My-Default'
+DEFAULT_DATA_VALUE FOR BEN_PEN_OPT_NAME_TN            IS 'My-Default'
+DEFAULT_DATA_VALUE FOR BEN_EXT_DPNT_PL_NAME           IS 'XYZ'
+DEFAULT_DATA_VALUE FOR BEN_EXT_DPNT_OPT_NAME          IS 'ABC'
+DEFAULT_DATA_VALUE FOR BEN_EXT_BNF_OPT_NAME           IS 'ABC'
+DEFAULT_DATA_VALUE FOR BEN_EXT_DPNT_DPNT_PERSON_ID    IS 1
+DEFAULT_DATA_VALUE FOR BEN_EXT_DPNT_DPNT_CVG_STRT_DT  IS '1950/01/01 12:00:00' (date)
+DEFAULT_DATA_VALUE FOR BEN_EXT_DPNT_DPNT_CVG_THRU_DT  IS '1950/01/01 12:00:00' (date)
+DEFAULT FOR BEN_PIL_LF_EVT_OCRD_DT                     IS '1950/01/01 12:00:00' (date)
+DEFAULT FOR BEN_LER_NAME                               IS 'Default Life Event'
+
+/*@section - Return Variables*/
+SUCCESSFUL    = 'Y'
+ERROR_MESSAGE = ' '
+
+/*@section - Context Variables*/
+L_PERSON_ID    = GET_CONTEXT(PERSON_ID, 0)
+L_PLAN_ID      = GET_CONTEXT(PL_ID, 0)
+L_OPT_ID       = GET_CONTEXT(OPT_ID, 0)
+L_FORMULA_NAME = 'ORA_BEN_DEPENDENT_ELECTION_FF'
+
+/*@section - Local Variables*/
+i        = 1
+j        = 1
+l_family = 'N'
+l_count  = 1
+
+l_ler_name       = BEN_LER_NAME
+l_lf_evt_ocrd_dt = BEN_PIL_LF_EVT_OCRD_DT
+
+/*@section - Plan and Option Identification*/
+PLAN_NAME = GET_VALUE_SET(
+              'ORA_BEN_PLAN_VS',
+              '|=PL_ID=''' || TO_CHAR(L_PLAN_ID) || ''''
+            )
+
+OPT_NAME  = GET_VALUE_SET(
+              'ORA_BEN_OPT_VS',
+              '|=OPT_ID=''' || TO_CHAR(L_OPT_ID) || ''''
+            )
+
+/*@section - Process Phase Check*/
+L_PHASE = BEN_GET_PROCESS_NAME()
+
+IF (L_PHASE != 'PARTICIPANT_ENROLLMENT')
+THEN
+(
+  /* Determine Effective Date */
+  IF (l_ler_name = 'New Hire' OR l_ler_name = 'Employee Newly Eligible')
+  THEN
+    l_new_effective_date = ADD_DAYS(l_lf_evt_ocrd_dt, 62)
+  ELSE
+    l_new_effective_date = l_lf_evt_ocrd_dt
+
+  CHANGE_CONTEXTS(EFFECTIVE_DATE = l_new_effective_date)
+  (
+    /*@section - Enrollment Validation*/
+    WHILE BEN_PEN_PL_NAME_TN.EXISTS(i)
+    LOOP
+    (
+      IF (BEN_PEN_PL_NAME_TN[i] = PLAN_NAME
+          AND BEN_PEN_OPT_NAME_TN[i] = OPT_NAME)
+      THEN
+      (
+        l_family = 'Y'
+        EXIT
+      )
+      i = i + 1
+    )
+
+    /*@section - Dependent Validation*/
+    IF l_family = 'Y'
+    THEN
+    (
+      j = 1
+      WHILE BEN_EXT_DPNT_PL_NAME.EXISTS(j)
+      LOOP
+      (
+        IF ( BEN_EXT_DPNT_PL_NAME[j] = PLAN_NAME
+             AND BEN_EXT_DPNT_OPT_NAME[j] = OPT_NAME
+             AND BEN_EXT_DPNT_DPNT_PERSON_ID[j] != 1
+             AND BEN_EXT_DPNT_DPNT_CVG_STRT_DT[j] < BEN_EXT_DPNT_DPNT_CVG_THRU_DT[j]
+           )
+        THEN
+        (
+          l_count = l_count + 1
+          EXIT
+        )
+        j = j + 1
+      )
+    )
+  )
+)
+
+/*@section - Validation Logic*/
+IF (l_family = 'Y' AND l_count = 1)
+THEN
+(
+  SUCCESSFUL    = 'N'
+  ERROR_MESSAGE = 'You need to designate dependents or beneficiaries for your selected ' 
+                  || PLAN_NAME || ' offerings.'
+)
+
+/*@section - Return Values*/
+RETURN SUCCESSFUL, ERROR_MESSAGE
