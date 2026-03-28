@@ -1,0 +1,27 @@
+Value Set Format:
+Value Set Code		: ORA_BEN_OPT_VS
+Description				: 
+Module 						: Benefits
+Validation Type 	: Table
+Value Data Type		: Character
+FROM Clause				: ben_pl_f
+Value Column Name : name
+ID Column Name 		: name
+WHERE Clause 			: 1=1
+										and opt_id =:{PARAMETER.OPT_ID}
+										and trunc(sysdate) between effective_start_date and effective_end_date
+										and name not in ('Employee Only','Decline/Waive Coverage','Employee Only ESNY 10 Month','Employee Only (CW PA)','Employee Only (Under $25,000)','Employee Only (Over $25,000)','Employee Only (Under $25,000) 10 Mos','Employee Only (Over $25,000) 10 Mos','Employee Only (Over $40,000)','Employee Only (Under $40,000)')
+ORDER BY Clause		: name
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SQL Query:
+select
+	name
+from
+	ben_pl_f
+where
+	1=1
+	and opt_id =:{PARAMETER.OPT_ID}
+	and trunc(sysdate) between effective_start_date and effective_end_date
+	and name not in ('Employee Only','Decline/Waive Coverage','Employee Only ESNY 10 Month','Employee Only (CW PA)','Employee Only (Under $25,000)','Employee Only (Over $25,000)','Employee Only (Under $25,000) 10 Mos','Employee Only (Over $25,000) 10 Mos','Employee Only (Over $40,000)','Employee Only (Under $40,000)')
+order by 
+  name
